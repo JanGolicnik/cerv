@@ -1,9 +1,9 @@
 cmake_minimum_required(VERSION 3.10)
 
-project(cerv)
+project(chtml)
 
 set(CMAKE_C_STANDARD 11)
 
 set(SOURCES main.c)
 
-add_executable(cerv ${SOURCES})
+add_executable(chtml ${SOURCES})

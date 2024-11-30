@@ -1,95 +1,97 @@
+#include <stdbool.h>
 #include <stdio.h>
-#include <errno.h>
+#include <stdlib.h>
 #include <unistd.h>
 #include <string.h>
-#include <arpa/inet.h>
 
-#define BUFFER_SIZE 1024
+#define error_and_exit(str, ...) printf(str, __VA_ARGS__); \
+        exit(1)
 
-void run_connection(int fd)
-{
-	char buffer[BUFFER_SIZE] = {0};
+void transform_file(const char* filename){
+    FILE *source_fp = fopen(filename, "r");
+    if (source_fp == NULL)
+    {
+        error_and_exit("ERROR: Failed to open source file %s for reading!", filename);
+    }
 
-	while (1)
-	{
-		unsigned int bytes_read = read(fd, buffer, BUFFER_SIZE - 1);
-		if (bytes_read <= 0)
-		{
-			printf("Client disconnected!\n");
-			return;
-		}
+    const char* extension = "_CHTML";
+    const int extension_len = strlen(extension);
+    const int filename_len = strlen(filename);
+    const int dot_pos =  abs(strrchr(filename, '.') - filename);
 
-		buffer[bytes_read - 1] = '\0';
+    char out_filename[filename_len + extension_len + 128];
+    memcpy(out_filename, filename, dot_pos);
+    memcpy(out_filename + dot_pos, extension, extension_len);
+    memcpy(out_filename + dot_pos + extension_len, filename + dot_pos, filename_len - dot_pos);
 
-		const char *msg = "<h1>HEY</h1>\n";
+    FILE *out_fp = fopen(out_filename, "w");
+    if (out_fp == NULL){
+        error_and_exit("ERROR: Failed to open file %s for writing!", filename);
+    }
 
-		printf("%s", buffer);
-		dprintf(fd, "HTTP/1.0 200 OK\n");
-		dprintf(fd, "Content-Type: text/html\n");
-		dprintf(fd, "Content-Length: %d\n\n", (int)strlen(msg));
-		dprintf(fd, "%s", msg);
-	}
+    size_t read_buffer_size = 0;
+    char *line = NULL;
+    
+    bool first_line = false;
+    bool parsing = false;
+    bool in_c_tag = false;
+    while(getline(&line, &read_buffer_size, source_fp) != -1)
+    {
+        if (strstr(line, "CHTML_START") != NULL)
+        {
+            parsing = true;
+            first_line = true;
+            fprintf(out_fp, "CHTML_EMIT(");
+        }
+        else if (strstr(line, "CHTML_END"))
+        {
+            parsing = false;
+            fprintf(out_fp, ");\n");
+        }
+        else if (parsing && strstr(line, "<c>"))
+        {
+            in_c_tag = true;
+            fprintf(out_fp, ");\n");
+        }
+        else if (parsing && strstr(line, "</c>"))
+        {
+            in_c_tag = false;
+            first_line = true;
+            fprintf(out_fp, "CHTML_EMIT(");
+        }
+        else if (parsing && !in_c_tag)
+        {
+            char* newline = strrchr(line, '\n');
+            if (!first_line)
+            {
+                fprintf(out_fp, "\n");
+            }
+            first_line = false;
+            if(newline != NULL) 
+            {
+                *newline = '\"';
+                fprintf(out_fp, "\"%s", line);
+            }
+            else
+            {
+                fprintf(out_fp, "\"%s\"", line);
+            }
+        }
+        else
+        {
+            fprintf(out_fp, "%s", line);
+        }
+    }
+
+    free(line);
 }
 
-int main()
+int main(int argc, char *argv[])
 {
-#define return_and_close(msg, fd) \
-	perror(msg);                  \
-	close(fd);                    \
-	return 1;
+    for (int i = 1; i < argc; i++)
+    {
+        transform_file(argv[i]);
+    }
 
-	// TODO: parse these from arguments
-	const unsigned short PORT = 8001;
-
-	int server_fd = 0;
-	struct sockaddr_in address = {0};
-	socklen_t address_len = sizeof(address);
-
-	server_fd = socket(AF_INET, SOCK_STREAM, 0);
-	if (server_fd < 0)
-	{
-		return_and_close("ERROR: Failed to open socket\n", server_fd);
-	}
-
-	int sockopt_val = 1;
-	setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &sockopt_val, sizeof(sockopt_val));
-
-	memset(&address, 0, sizeof(address));
-	address.sin_family = AF_INET;
-	address.sin_addr.s_addr = INADDR_ANY;
-	address.sin_port = htons(PORT);
-
-	int bind_result = bind(server_fd, (struct sockaddr *)&address, address_len);
-	if (bind_result < 0)
-	{
-		return_and_close("ERROR: Failed to bind to port\n", server_fd);
-	}
-
-	printf("Server is listening on port %d..\n", PORT);
-
-	while (1)
-	{
-		if (listen(server_fd, 1) < 0)
-		{
-			return_and_close("ERROR: failed to listen for connections", server_fd);
-		}
-
-		int client_fd = accept(server_fd, (struct sockaddr *)&address, &address_len);
-		if (client_fd < 0)
-		{
-			return_and_close("ERROR: Failed to accept connection\n", server_fd);
-		}
-
-		printf("Client connected!\n");
-
-		run_connection(client_fd);
-
-		close(client_fd);
-	}
-
-	close(server_fd);
-
-	return 0;
-
-#undef return_and_close
+    return 0;
 }
